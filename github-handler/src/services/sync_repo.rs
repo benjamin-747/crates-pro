@@ -14,32 +14,32 @@ pub(crate) async fn sync_repo_with_sha(
     skip_days: i32,
 ) -> Result<(), anyhow::Error> {
     let stg = context.github_handler_stg();
-    let url_stream = stg.query_programs_stream(cratesio).await.unwrap();
+    let program_stream = stg.query_programs_stream(cratesio).await.unwrap();
     let skip_days_ago = Utc::now().naive_utc() - Duration::days(skip_days.into());
 
-    url_stream
+    program_stream
         .try_for_each_concurrent(16, |model| {
             let context = context.clone();
             let base_dir = context.base_dir.clone();
-            let model = model.clone();
+            let program = model.clone();
             let stg = stg.clone();
             async move {
-                if let Some(sync_date) = model.repo_sync_at {
+                if let Some(sync_date) = program.repo_sync_at {
                     if sync_date > skip_days_ago {
                         return Ok(());
                     }
                 }
-                if let Some((owner, repo)) = utils::parse_to_owner_and_repo(&model.github_url) {
+                if let Some((owner, repo)) = utils::parse_to_owner_and_repo(&program.github_url) {
                     let nested_path = utils::repo_dir(base_dir, &owner, &repo);
                     if nested_path.exists() {
                         if git::update_repo(&nested_path, &owner, &repo).await.is_ok() {
-                            save_sync_time(model, &stg).await?;
+                            save_sync_time(program, &stg).await?;
                         }
                     } else if git::clone_repo(&nested_path, &owner, &repo, false)
                         .await
                         .is_ok()
                     {
-                        save_sync_time(model, &stg).await?;
+                        save_sync_time(program, &stg).await?;
                     }
                 }
                 Ok(())

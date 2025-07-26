@@ -238,6 +238,7 @@ impl GitHubApiClient {
             "{}/repos/{}/{}/commits?page=1&per_page=1&author={}",
             GITHUB_API_URL, owner, repo, login
         );
+        info!("根据user email 获取commit:{}", url);
 
         let response = self.authorized_request(&url).await?;
 
@@ -397,7 +398,7 @@ impl GitHubApiClient {
 
     pub async fn start_graphql_sync(&self, context: &Context) -> Result<(), Error> {
         let date = NaiveDate::parse_from_str("2010-06-16", "%Y-%m-%d").unwrap();
-        let end_date = NaiveDate::parse_from_str("2025-05-23", "%Y-%m-%d").unwrap();
+        let end_date = NaiveDate::parse_from_str("2025-07-26", "%Y-%m-%d").unwrap();
         // let threshold_date = NaiveDate::parse_from_str("2015-01-01", "%Y-%m-%d").unwrap();
 
         let dates: Vec<NaiveDate> = {
@@ -591,6 +592,7 @@ async fn convert_to_model(item: Repository, save_models: &mut Vec<programs::Acti
         github_node_id: Set(item.id),
         updated_at: Set(Some(chrono::Utc::now().naive_utc())),
         repo_sync_at: Set(None),
+        recently_update: Set(None),
     };
     save_models.push(model);
 }

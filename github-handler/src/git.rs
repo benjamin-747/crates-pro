@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Datelike, Duration, Utc};
+use std::collections::HashSet;
 use tokio::process::Command as TokioCommand;
 use tracing::{debug, error, info, warn};
 
@@ -151,4 +153,98 @@ pub async fn restore_shallow_repo(target_dir: &PathBuf) -> Result<(), anyhow::Er
     }
 
     Ok(())
+}
+
+fn recent_months(n: usize) -> Vec<(i32, u32)> {
+    let now = Utc::now().naive_utc();
+    (0..n)
+        .map(|i| {
+            let d = now - Duration::days(30 * i as i64);
+            (d.year(), d.month())
+        })
+        .collect()
+}
+
+fn extract_months_from_timestamps(timestamps: &[i64]) -> HashSet<(i32, u32)> {
+    timestamps
+        .iter()
+        .filter_map(|ts| DateTime::from_timestamp(*ts, 0))
+        .map(|dt| (dt.year(), dt.month()))
+        .collect()
+}
+
+fn all_months_present(target_months: &[(i32, u32)], seen_months: &HashSet<(i32, u32)>) -> bool {
+    target_months.iter().all(|m| seen_months.contains(m))
+}
+
+pub async fn check_commit_last_three_month(target_dir: &PathBuf) -> bool {
+    let target_months = recent_months(3);
+
+    let output = TokioCommand::new("git")
+        .current_dir(target_dir)
+        .args(["log", "--since=3.months", "--pretty=format:%ct"])
+        .output()
+        .await
+        .expect("failed to execute git log");
+
+    if !output.status.success() {
+        eprintln!(
+            "git log failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return false;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let timestamps: Vec<i64> = stdout
+        .lines()
+        .filter_map(|line| line.trim().parse::<i64>().ok())
+        .collect();
+
+    let seen_months = extract_months_from_timestamps(&timestamps);
+    all_months_present(&target_months, &seen_months)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn test_extract_months_from_timestamps() {
+        let ts1 = Utc
+            .with_ymd_and_hms(2025, 7, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp();
+        let ts2 = Utc
+            .with_ymd_and_hms(2025, 6, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp();
+        let ts3 = Utc
+            .with_ymd_and_hms(2025, 5, 1, 0, 0, 0)
+            .unwrap()
+            .timestamp();
+        let timestamps = vec![ts1, ts2, ts3];
+
+        let months = extract_months_from_timestamps(&timestamps);
+
+        assert!(months.contains(&(2025, 7)));
+        assert!(months.contains(&(2025, 6)));
+        assert!(months.contains(&(2025, 5)));
+        assert_eq!(months.len(), 3);
+    }
+
+    #[test]
+    fn test_all_months_present_true() {
+        let target = vec![(2025, 5), (2025, 6), (2025, 7)];
+        let seen = HashSet::from([(2025, 5), (2025, 6), (2025, 7)]);
+        assert!(all_months_present(&target, &seen));
+    }
+
+    #[test]
+    fn test_all_months_present_false() {
+        let target = vec![(2025, 5), (2025, 6), (2025, 7)];
+        let seen = HashSet::from([(2025, 6), (2025, 7)]);
+        assert!(!all_months_present(&target, &seen));
+    }
 }

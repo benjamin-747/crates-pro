@@ -453,32 +453,6 @@ pub(crate) async fn analyze_git_contributors(
             }
         })
         .await;
-
-    // 查询并显示贡献者统计
-    // match context
-    //     .github_handler_stg()
-    //     .query_top_contributors(&repository_id)
-    //     .await
-    // {
-    //     Ok(top_contributors) => {
-    //         info!("仓库 {}/{} 的贡献者统计:", owner, repo);
-    //         for (i, contributor) in top_contributors.iter().enumerate().take(10) {
-    //             info!(
-    //                 "  {}. {} - {} 次提交",
-    //                 i + 1,
-    //                 contributor.login,
-    //                 contributor.contributions
-    //             );
-    //         }
-    //     }
-    //     Err(e) => {
-    //         error!("查询贡献者统计失败: {}", e);
-    //     }
-    // }
-
-    // 分析贡献者国别 - 传递已获取的用户信息
-    // analyze_contributor_locations(context, owner, repo, repository_id, &analyzed_users).await?;
-
     Ok(())
 }
 
@@ -564,10 +538,10 @@ pub async fn analyze_all(
     not_analyzed: bool,
 ) -> Result<(), BoxError> {
     let stg = context.github_handler_stg();
-    let url_stream = stg.query_programs_stream(cratesio).await.unwrap();
+    let program_stream = stg.query_programs_stream(cratesio).await.unwrap();
 
     // 并发处理 Stream
-    url_stream
+    program_stream
         .try_for_each_concurrent(8, |model| {
             let context = context.clone();
             let stg = stg.clone();

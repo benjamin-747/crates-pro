@@ -5,7 +5,7 @@ use database::storage::Context;
 use services::sync_repo;
 use tracing::info;
 
-use crate::services::github_api::GitHubApiClient;
+use crate::services::{common_analysis, github_api::GitHubApiClient};
 
 // 导入模块
 mod config;
@@ -75,6 +75,8 @@ enum Commands {
     UpdateCratesNodeid,
     /// 给programs设置 in_cratesio 字段
     UpdateProgram,
+    /// 根据最近提交的记录更新recently_update字段
+    RecentlyUpdate,
 }
 
 // 定义错误类型
@@ -145,6 +147,10 @@ async fn main() -> Result<(), BoxError> {
 
         Some(Commands::UpdateProgram) => {
             sync_repo::update_programs(context).await?;
+        }
+
+        Some(Commands::RecentlyUpdate) => {
+            common_analysis::recently_update(context).await?;
         }
 
         None => {

@@ -111,6 +111,16 @@ impl GithubHanlderStorage {
             .await
     }
 
+    pub async fn query_non_recently_programs_stream(
+        &self,
+    ) -> Result<impl Stream<Item = Result<programs::Model, DbErr>> + Send + '_, DbErr> {
+        programs::Entity::find()
+            .filter(programs::Column::RecentlyUpdate.is_null())
+            .order_by_asc(programs::Column::Id)
+            .stream(self.get_connection())
+            .await
+    }
+
     pub async fn check_program_in_analyze(&self, p_id: Uuid) -> Result<bool, DbErr> {
         let count = contributor_location::Entity::find()
             .filter(contributor_location::Column::RepositoryId.eq(p_id))
