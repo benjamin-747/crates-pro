@@ -3,7 +3,7 @@ use std::sync::Arc;
 use entity::{
     contributor_location, crates, github_sync_status, github_user,
     programs::{self},
-    repository_contributor,
+    programs_with_condition, repository_contributor,
 };
 use futures::Stream;
 use model::github::ContributorAnalysis;
@@ -69,6 +69,26 @@ impl GithubHanlderStorage {
             .exec(self.get_connection())
             .await
             .unwrap();
+        Ok(())
+    }
+
+    pub async fn save_programs_with_cond(
+        &self,
+        models: Vec<programs_with_condition::ActiveModel>,
+    ) -> Result<(), DbErr> {
+        match programs_with_condition::Entity::insert_many(models)
+            .on_conflict(
+                OnConflict::column(programs_with_condition::Column::GithubUrl)
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .exec(self.get_connection())
+            .await
+        {
+            Ok(_) => {}
+            Err(sea_orm::DbErr::RecordNotInserted) => {}
+            Err(_) => {}
+        };
         Ok(())
     }
 

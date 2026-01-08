@@ -18,7 +18,7 @@ pub(crate) async fn sync_repo_with_sha(
     let skip_days_ago = Utc::now().naive_utc() - Duration::days(skip_days.into());
 
     program_stream
-        .try_for_each_concurrent(16, |model| {
+        .try_for_each_concurrent(32, |model| {
             let context = context.clone();
             let base_dir = context.base_dir.clone();
             let program = model.clone();

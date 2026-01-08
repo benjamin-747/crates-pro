@@ -4,15 +4,13 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, Serialize, Deserialize)]
-#[sea_orm(table_name = "cves")]
+#[sea_orm(table_name = "programs_with_condition")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
-    pub cve_id: String,
-    pub name: Option<String>,
-    pub start_version: Option<String>,
-    pub end_version: Option<String>,
-    #[sea_orm(column_type = "Text", nullable)]
-    pub description: Option<String>,
+    pub id: Uuid,
+    pub name: String,
+    #[sea_orm(column_type = "Text")]
+    pub github_url: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

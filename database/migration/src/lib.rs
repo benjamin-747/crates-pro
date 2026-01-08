@@ -9,6 +9,7 @@ mod m20250418_081905_add_new_tables;
 mod m20250424_092358_alter_programs;
 mod m20250617_030938_add_sync_time_in_programs;
 mod m20250726_034329_update_programs;
+mod m20260108_015909_add_programs_with_condition;
 
 pub struct Migrator;
 
@@ -25,6 +26,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20250424_092358_alter_programs::Migration),
             Box::new(m20250617_030938_add_sync_time_in_programs::Migration),
             Box::new(m20250726_034329_update_programs::Migration),
+            Box::new(m20260108_015909_add_programs_with_condition::Migration),
         ]
     }
 }

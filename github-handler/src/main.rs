@@ -69,6 +69,8 @@ enum Commands {
     UpdateProgram,
     /// 根据最近提交的记录更新recently_update字段
     RecentlyUpdate,
+    /// 根据条件language:Rust size:>10 stars:>10 pushed:>2020-01-01 搜索
+    SyncCondition,
 }
 
 // 定义错误类型
@@ -111,7 +113,12 @@ async fn main() -> Result<(), BoxError> {
 
         Some(Commands::SyncUrl) => {
             let github_client = GitHubApiClient::new();
-            github_client.start_graphql_sync(&context).await?;
+            github_client.start_all_sync(&context).await?;
+        }
+
+        Some(Commands::SyncCondition) => {
+            let github_client = GitHubApiClient::new();
+            github_client.start_sync_condition(&context).await?;
         }
 
         Some(Commands::AnalyzeAll {

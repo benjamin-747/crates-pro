@@ -8,10 +8,10 @@ use tracing::log;
 pub async fn database_connection(db_url: &str) -> Result<DatabaseConnection, DbErr> {
     log::info!("Connecting to database: {}", db_url);
     let mut opt = ConnectOptions::new(db_url);
-    opt.max_connections(32)
+    opt.max_connections(96)
         .min_connections(4)
-        .acquire_timeout(Duration::from_secs(3))
-        .connect_timeout(Duration::from_secs(3))
+        .acquire_timeout(Duration::from_secs(20))
+        .connect_timeout(Duration::from_secs(20))
         .idle_timeout(Duration::from_secs(8))
         .max_lifetime(Duration::from_secs(8))
         .sqlx_logging(true)

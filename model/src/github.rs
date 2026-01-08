@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use entity::{contributor_location, github_user, programs};
+use entity::{contributor_location, github_user, programs, programs_with_condition};
 use sea_orm::ActiveValue::{NotSet, Set};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -52,6 +52,7 @@ impl From<GitHubUser> for github_user::ActiveModel {
             updated_at: Set(user.updated_at.naive_utc()),
             inserted_at: Set(now),
             updated_at_local: Set(now),
+            commit_email: Set(None),
         }
     }
 }
@@ -136,6 +137,48 @@ pub struct Repository {
     pub url: String,
     pub created_at: String,
 }
+
+impl From<Repository> for programs_with_condition::ActiveModel {
+    fn from(value: Repository) -> Self {
+        Self {
+            id: Set(Uuid::new_v4()),
+            github_url: Set(value.url),
+            name: Set(value.name),
+        }
+    }
+}
+
+impl From<Repository> for programs::ActiveModel {
+    fn from(value: Repository) -> Self {
+        programs::ActiveModel {
+            id: Set(Uuid::new_v4()),
+            github_url: Set(value.url),
+            name: Set(value.name),
+            description: Set("".to_owned()),
+            namespace: Set("".to_owned()),
+            max_version: Set("".to_owned()),
+            mega_url: Set("".to_owned()),
+            doc_url: Set("".to_owned()),
+            program_type: Set("".to_owned()),
+            downloads: Set(0),
+            cratesio: Set("".to_owned()),
+            repo_created_at: Set(Some(
+                value
+                    .created_at
+                    .parse::<DateTime<Utc>>()
+                    .unwrap()
+                    .naive_utc(),
+            )),
+            github_analyzed: Set(false),
+            in_cratesio: Set(false),
+            github_node_id: Set(value.id),
+            updated_at: Set(Some(chrono::Utc::now().naive_utc())),
+            repo_sync_at: Set(None),
+            recently_update: Set(None),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphQLResponse {

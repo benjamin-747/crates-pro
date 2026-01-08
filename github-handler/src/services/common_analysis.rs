@@ -34,7 +34,7 @@ pub async fn recently_update(context: Context) -> Result<(), BoxError> {
                     }
                 }
                 let count = counter.fetch_add(1, Ordering::SeqCst) + 1;
-                if count % 1000 == 0 {
+                if count.is_multiple_of(1000) {
                     tracing::info!("已经处理了 {} 个 program", count);
                 }
                 Ok(())

@@ -1,22 +1,20 @@
-use chrono::{DateTime, Duration, NaiveDate, Utc};
-use database::storage::Context;
-use entity::{github_sync_status, programs};
+use chrono::{Duration, NaiveDate};
 use futures::{stream, StreamExt};
-use model::github::{Contributor, GitHubUser, RestfulRepository};
 use reqwest::{header, Client, Error, Response};
-use sea_orm::{
-    prelude::Uuid,
-    ActiveValue::{NotSet, Set},
-};
+use sea_orm::ActiveValue::{NotSet, Set};
 use serde_json::json;
 use tracing::{debug, error, info, warn};
 
-// GitHub API URL
+use database::storage::Context;
+use entity::github_sync_status;
+use model::github::{CommitData, GraphQLResponse};
+use model::github::{Contributor, GitHubUser, RestfulRepository};
+
+use crate::config::get_github_token;
+
 const GITHUB_API_URL: &str = "https://api.github.com";
 
-// 使用main中定义的函数获取GitHub令牌
-use crate::config::get_github_token;
-use model::github::{CommitData, GraphQLResponse, Repository};
+const GITHUB_GRAPH_API_URL: &str = "https://api.github.com/graphql";
 
 // GitHub API客户端
 pub struct GitHubApiClient {
@@ -397,7 +395,7 @@ impl GitHubApiClient {
         Ok(commit_contributors)
     }
 
-    pub async fn start_graphql_sync(&self, context: &Context) -> Result<(), Error> {
+    pub async fn start_all_sync(&self, context: &Context) -> Result<(), Error> {
         let date = NaiveDate::parse_from_str("2010-06-16", "%Y-%m-%d").unwrap();
         let end_date = NaiveDate::parse_from_str("2025-12-30", "%Y-%m-%d").unwrap();
         // let threshold_date = NaiveDate::parse_from_str("2015-01-01", "%Y-%m-%d").unwrap();
@@ -418,7 +416,7 @@ impl GitHubApiClient {
                 async move {
                     tracing::info!("Syncing date: {}", date.format("%Y-%m-%d"));
                     if let Err(err) = self
-                        .sync_with_date(
+                        .sync_all_repo(
                             &context,
                             &date.format("%Y-%m-%d").to_string(),
                             &date.format("%Y-%m-%d").to_string(),
@@ -434,7 +432,7 @@ impl GitHubApiClient {
         Ok(())
     }
 
-    async fn sync_with_date(
+    async fn sync_all_repo(
         &self,
         context: &Context,
         start_date: &str,
@@ -450,7 +448,6 @@ impl GitHubApiClient {
                 return Ok(());
             }
         }
-        const GITHUB_API_URL: &str = "https://api.github.com/graphql";
 
         let client = reqwest::Client::new();
         let mut cursor: Option<String> = None;
@@ -485,7 +482,7 @@ impl GitHubApiClient {
             });
             let token = get_github_token().await;
             let response = client
-                .post(GITHUB_API_URL)
+                .post(GITHUB_GRAPH_API_URL)
                 .header("Authorization", format!("token {}", &token))
                 .header("User-Agent", "Rust-GraphQL-Client")
                 .json(&request_body)
@@ -533,7 +530,7 @@ impl GitHubApiClient {
                 match json.data {
                     Some(data) => {
                         for edge in data.search.edges {
-                            convert_to_model(edge.node, &mut save_models).await;
+                            save_models.push(edge.node.into());
                         }
                         context
                             .github_handler_stg()
@@ -567,35 +564,174 @@ impl GitHubApiClient {
         }
         Ok(())
     }
-}
 
-async fn convert_to_model(item: Repository, save_models: &mut Vec<programs::ActiveModel>) {
-    let model = programs::ActiveModel {
-        id: Set(Uuid::new_v4()),
-        github_url: Set(item.url),
-        name: Set(item.name),
-        description: Set("".to_owned()),
-        namespace: Set("".to_owned()),
-        max_version: Set("".to_owned()),
-        mega_url: Set("".to_owned()),
-        doc_url: Set("".to_owned()),
-        program_type: Set("".to_owned()),
-        downloads: Set(0),
-        cratesio: Set("".to_owned()),
-        repo_created_at: Set(Some(
-            item.created_at
-                .parse::<DateTime<Utc>>()
-                .unwrap()
-                .naive_utc(),
-        )),
-        github_analyzed: Set(false),
-        in_cratesio: Set(false),
-        github_node_id: Set(item.id),
-        updated_at: Set(Some(chrono::Utc::now().naive_utc())),
-        repo_sync_at: Set(None),
-        recently_update: Set(None),
-    };
-    save_models.push(model);
+    pub async fn start_sync_condition(&self, context: &Context) -> Result<(), Error> {
+        let date = NaiveDate::parse_from_str("2010-06-16", "%Y-%m-%d").unwrap();
+        let end_date = NaiveDate::parse_from_str("2026-01-08", "%Y-%m-%d").unwrap();
+
+        let dates: Vec<NaiveDate> = {
+            let mut d = date;
+            let mut v = Vec::new();
+            while d <= end_date {
+                v.push(d);
+                d += Duration::days(1);
+            }
+            v
+        };
+
+        stream::iter(dates)
+            .for_each_concurrent(4, |date| {
+                let context = context.clone();
+                async move {
+                    tracing::info!("Syncing date: {}", date.format("%Y-%m-%d"));
+                    if let Err(err) = self
+                        .sync_with_condition(
+                            &context,
+                            &date.format("%Y-%m-%d").to_string(),
+                            &date.format("%Y-%m-%d").to_string(),
+                        )
+                        .await
+                    {
+                        tracing::error!("Failed to sync {}: {:?}", date, err);
+                    }
+                }
+            })
+            .await;
+
+        Ok(())
+    }
+
+    async fn sync_with_condition(
+        &self,
+        context: &Context,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<(), Error> {
+        let sync_record = context
+            .github_handler_stg()
+            .get_github_sync_status_by_date(start_date, end_date)
+            .await
+            .unwrap();
+        if let Some(record) = sync_record {
+            if record.sync_result {
+                return Ok(());
+            }
+        }
+        let client = reqwest::Client::new();
+        let mut cursor: Option<String> = None;
+
+        let page_success = loop {
+            let query = r#"
+        query ($query: String!, $cursor: String) {
+            search(query: $query, type: REPOSITORY, first: 100, after: $cursor) {
+                edges {
+                    node {
+                        ... on Repository {
+                            id
+                            name
+                            url
+                            createdAt
+                        }
+                    }
+                }
+                pageInfo {
+                    endCursor
+                    hasNextPage
+                }
+            }
+        }
+        "#;
+
+            let variables = json!({ "query": format!("language:Rust size:>10 stars:>10 pushed:>2020-01-01 created:{}..{}" , start_date, end_date), "cursor": cursor });
+
+            let request_body = json!({
+                "query": query,
+                "variables": variables
+            });
+            let token = get_github_token().await;
+            let response = client
+                .post(GITHUB_GRAPH_API_URL)
+                .header("Authorization", format!("token {}", &token))
+                .header("User-Agent", "Rust-GraphQL-Client")
+                .json(&request_body)
+                .send()
+                .await;
+            let res = match response {
+                Ok(response) => {
+                    let status = response.status();
+                    let body = response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "Failed to read response body".to_string());
+                    tracing::info!("response body:{}", body);
+                    if status.is_success() {
+                        match serde_json::from_str::<GraphQLResponse>(&body) {
+                            Ok(parsed) => Some(parsed),
+                            Err(e) => {
+                                tracing::error!(
+                                    "❌ JSON Parse Error: {:?}\nRaw Response: {}",
+                                    e,
+                                    body
+                                );
+                                None
+                            }
+                        }
+                    } else {
+                        tracing::error!(
+                            "❌ HTTP Error: {} - {}, token: {}",
+                            status,
+                            body,
+                            self.mask_token(&token)
+                        );
+                        None
+                    }
+                }
+                Err(err) => {
+                    tracing::error!("❌ Request failed: {:?}", err);
+                    None
+                }
+            };
+
+            let mut save_models = vec![];
+
+            if let Some(json) = res {
+                match json.data {
+                    Some(data) => {
+                        for edge in data.search.edges {
+                            save_models.push(edge.node.into());
+                        }
+                        context
+                            .github_handler_stg()
+                            .save_programs_with_cond(save_models)
+                            .await
+                            .unwrap();
+                        if data.search.page_info.has_next_page {
+                            cursor = data.search.page_info.end_cursor;
+                        } else {
+                            break true;
+                        }
+                    }
+                    None => break false,
+                }
+            } else {
+                break false;
+            }
+        };
+
+        if page_success {
+            context
+                .github_handler_stg()
+                .save_github_sync_status(github_sync_status::ActiveModel {
+                    id: NotSet,
+                    start_date: Set(start_date.to_owned()),
+                    end_date: Set(end_date.to_owned()),
+                    sync_result: Set(true),
+                })
+                .await
+                .unwrap();
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
