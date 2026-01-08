@@ -29,7 +29,7 @@ impl GitHubApiClient {
         // 初始化为不带认证的Client
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
-            .user_agent("github-handler")
+            .user_agent("crates-pro-sync/0.1 (contact: yetianxing2014@gmail.com)")
             .build()
             .unwrap_or_else(|_| Client::new());
 
@@ -67,6 +67,7 @@ impl GitHubApiClient {
     ) -> Result<Response, reqwest::Error> {
         if !response.status().is_success() {
             // 如果是速率限制，打印详细信息
+            // tracing::error!("response:{:?}", response);
             if response.status() == reqwest::StatusCode::FORBIDDEN {
                 if let Some(remain) = response.headers().get("x-ratelimit-remaining") {
                     error!(
@@ -238,7 +239,7 @@ impl GitHubApiClient {
             "{}/repos/{}/{}/commits?page=1&per_page=1&author={}",
             GITHUB_API_URL, owner, repo, login
         );
-        info!("根据user email 获取commit:{}", url);
+        // info!("根据login 获取commit:{}", url);
 
         let response = self.authorized_request(&url).await?;
 
@@ -398,7 +399,7 @@ impl GitHubApiClient {
 
     pub async fn start_graphql_sync(&self, context: &Context) -> Result<(), Error> {
         let date = NaiveDate::parse_from_str("2010-06-16", "%Y-%m-%d").unwrap();
-        let end_date = NaiveDate::parse_from_str("2025-07-26", "%Y-%m-%d").unwrap();
+        let end_date = NaiveDate::parse_from_str("2025-12-30", "%Y-%m-%d").unwrap();
         // let threshold_date = NaiveDate::parse_from_str("2015-01-01", "%Y-%m-%d").unwrap();
 
         let dates: Vec<NaiveDate> = {

@@ -17,7 +17,7 @@ BEGIN;
 
     -- Import the CSV data.
 
-    \copy "crates" ("created_at", "description", "documentation", "homepage", "id", "max_features", "max_upload_size", "name", "readme", "repository", "updated_at") FROM 'data/crates.csv' WITH CSV HEADER
+    \copy "crates" ("created_at", "description", "documentation", "homepage", "id", "max_features", "max_upload_size", "name", "readme", "repository", "trustpub_only", "updated_at") FROM 'data/crates.csv' WITH CSV HEADER
     \copy "crate_users" ("gh_avatar", "gh_id", "gh_login", "id", "name") FROM 'data/crate_users.csv' WITH CSV HEADER
     \copy "crate_owners" ("crate_id", "created_at", "created_by", "owner_id", "owner_kind") FROM 'data/crate_owners.csv' WITH CSV HEADER
     \copy "crate_downloads" ("crate_id", "downloads") FROM 'data/crate_downloads.csv' WITH CSV HEADER

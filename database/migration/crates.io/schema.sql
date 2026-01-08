@@ -392,7 +392,8 @@ CREATE TABLE public.crates (
     readme character varying,
     repository character varying,
     max_upload_size integer,
-    max_features smallint
+    max_features smallint,
+    trustpub_only boolean DEFAULT false NOT NULL
 );
 
 

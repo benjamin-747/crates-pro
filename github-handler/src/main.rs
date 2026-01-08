@@ -54,14 +54,6 @@ enum Commands {
         #[arg(long, action = ArgAction::SetTrue)]
         not_analyzed: bool,
     },
-    /// 分析仓库贡献者
-    Analyze {
-        /// 仓库所有者
-        owner: String,
-
-        /// 仓库名称
-        repo: String,
-    },
 
     /// 查询仓库贡献者统计
     Query {
@@ -113,10 +105,6 @@ async fn main() -> Result<(), BoxError> {
 
     // 处理子命令
     match cli.command {
-        Some(Commands::Analyze { owner, repo }) => {
-            contributor_analysis::analyze_git_contributors(context, &owner, &repo).await?;
-        }
-
         Some(Commands::Query { owner, repo }) => {
             contributor_analysis::query_top_contributors(context, &owner, &repo).await?;
         }
@@ -154,13 +142,7 @@ async fn main() -> Result<(), BoxError> {
         }
 
         None => {
-            // 如果没有提供子命令，但提供了owner和repo参数
-            if let (Some(owner), Some(repo)) = (cli.owner, cli.repo) {
-                contributor_analysis::analyze_git_contributors(context, &owner, &repo).await?;
-            } else {
-                // 没有足够的参数，显示帮助信息
-                println!("请提供仓库所有者和名称，或使用子命令。运行 --help 获取更多信息。");
-            }
+            println!("请提供仓库所有者和名称，或使用子命令。运行 --help 获取更多信息。");
         }
     }
 

@@ -24,3 +24,5 @@ Cargo.lock
 
 # Temp files for Docker image creation
 /build/
+
+*.csv

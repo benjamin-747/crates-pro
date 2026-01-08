@@ -11,9 +11,9 @@ use sea_orm::{
     prelude::{Expr, Uuid},
     sea_query::{self, OnConflict},
     ActiveModelTrait,
-    ActiveValue::Set,
+    ActiveValue::{self, Set},
     ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, Statement,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Statement,
 };
 use tracing::{debug, info, warn};
 
@@ -89,11 +89,25 @@ impl GithubHanlderStorage {
         Ok(())
     }
 
-    pub async fn update_program(
-        &self,
-        model: programs::ActiveModel,
-    ) -> Result<programs::Model, DbErr> {
-        model.update(self.get_connection()).await
+    pub async fn update_program(&self, model: programs::ActiveModel) -> Result<(), DbErr> {
+        let id = model.id.clone().unwrap();
+
+        let mut updater = programs::Entity::update_many().filter(programs::Column::Id.eq(id));
+
+        // github_analyzed
+        if let ActiveValue::Set(v) = model.github_analyzed {
+            updater = updater
+                .col_expr(programs::Column::GithubAnalyzed, Expr::value(v))
+                .filter(programs::Column::GithubAnalyzed.ne(v));
+        }
+        // updated_at（通常你会想总是更新）
+        if let ActiveValue::Set(v) = model.updated_at {
+            updater = updater.col_expr(programs::Column::RecentlyUpdate, Expr::value(v));
+        }
+
+        updater.exec(self.get_connection()).await?;
+
+        Ok(())
     }
 
     pub async fn query_programs_stream(
@@ -175,6 +189,15 @@ impl GithubHanlderStorage {
         debug!("通过登录名查找用户: {}", login);
 
         let user = github_user::Entity::find()
+            .select_only()
+            .column(github_user::Column::Id)
+            .column(github_user::Column::GithubId)
+            .column(github_user::Column::Login)
+            .column(github_user::Column::Email)
+            .column(github_user::Column::CreatedAt)
+            .column(github_user::Column::UpdatedAt)
+            .column(github_user::Column::InsertedAt)
+            .column(github_user::Column::UpdatedAtLocal)
             .filter(github_user::Column::Login.eq(login))
             .one(self.get_connection())
             .await?;
@@ -506,11 +529,16 @@ impl GithubHanlderStorage {
     pub async fn query_crates_stream(
         &self,
     ) -> Result<impl Stream<Item = Result<crates::Model, DbErr>> + Send + '_, DbErr> {
+        let github_repo_condition = Condition::any()
+            .add(crates::Column::Repository.like("https://github.com%"))
+            .add(crates::Column::Repository.like("http://github.com%"))
+            .add(crates::Column::Repository.like("https://www.github.com%"))
+            .add(crates::Column::Repository.like("http://www.github.com%"));
         crates::Entity::find()
             .filter(crates::Column::Repository.is_not_null())
             .filter(crates::Column::RepoInvalid.eq(false))
             .filter(crates::Column::GithubNodeId.is_null())
-            .filter(crates::Column::Repository.like("https://github.com%"))
+            .filter(github_repo_condition)
             .order_by_asc(crates::Column::Id)
             .stream(self.get_connection())
             .await
@@ -553,6 +581,13 @@ impl GithubHanlderStorage {
         programs::Entity::update_many()
             .col_expr(programs::Column::InCratesio, Expr::value(true))
             .filter(programs::Column::GithubNodeId.is_in(batch_node_ids))
+            .exec(self.get_connection())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn remove_programs_and_related(&self, program_id: Uuid) -> Result<(), DbErr> {
+        programs::Entity::delete_by_id(program_id)
             .exec(self.get_connection())
             .await?;
         Ok(())

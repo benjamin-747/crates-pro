@@ -30,10 +30,6 @@ pub async fn analyze_contributor_timezone(
     repo_path: &PathBuf,
     analyzed_emails: &HashSet<String>,
 ) -> Option<ContributorAnalysis> {
-    if !repo_path.exists() {
-        error!("仓库路径不存在: {}", repo_path.display());
-        return None;
-    }
     // 用于分析的邮箱可能存在多个不同的值，如profile 设置的值，commit时设置的值
     info!("分析作者 {:?} 的时区统计", analyzed_emails);
 
@@ -350,39 +346,12 @@ pub(crate) async fn analyze_git_contributors(
     context: Context,
     owner: &str,
     repo: &str,
+    repository_id: Uuid,
 ) -> Result<(), anyhow::Error> {
     info!("分析仓库贡献者: {}/{}", owner, repo);
 
     // 创建GitHub API客户端
     let github_client = GitHubApiClient::new();
-
-    // 获取仓库ID
-    let repository_id = match context
-        .github_handler_stg()
-        .get_repository_id(owner, repo)
-        .await?
-    {
-        Some(id) => id,
-        None => {
-            let repository = github_client.get_repo_info(owner, repo).await;
-            match repository {
-                Ok(repository) => {
-                    let programs: programs::ActiveModel = repository.into();
-                    let id = programs.clone().r#id.unwrap();
-                    context
-                        .github_handler_stg()
-                        .save_or_update_programs_by_node_id(vec![programs])
-                        .await
-                        .unwrap();
-                    id
-                }
-                Err(_) => {
-                    warn!("无法查询到仓库 {}/{}", owner, repo);
-                    return Ok(());
-                }
-            }
-        }
-    };
 
     // 获取仓库贡献者
     let contributors = match github_client
@@ -398,7 +367,7 @@ pub(crate) async fn analyze_git_contributors(
 
     // let analyzed_users: Vec<AnalyzedUser> =
     stream::iter(contributors)
-        .for_each_concurrent(8, |contributor| {
+        .for_each_concurrent(2, |contributor| {
             let context = context.clone();
             let github_client = GitHubApiClient::new();
             async move {
@@ -406,28 +375,38 @@ pub(crate) async fn analyze_git_contributors(
                     .github_handler_stg()
                     .get_user_by_name(&contributor.login)
                     .await
-                    .unwrap()
                 {
-                    Some(user) => user,
-                    None => {
-                        // 获取并存储用户详细信息
-                        let user = match github_client.get_user_details(&contributor.login).await {
-                            Ok(user) => user,
-                            Err(e) => {
-                                warn!("获取用户 {} 失败: {}", contributor.login, e);
-                                return;
+                    Ok(res) => {
+                        match res {
+                            Some(user) => user,
+                            None => {
+                                // 获取并存储用户详细信息
+                                let user = match github_client
+                                    .get_user_details(&contributor.login)
+                                    .await
+                                {
+                                    Ok(user) => user,
+                                    Err(e) => {
+                                        warn!("获取用户 {} 失败: {}", contributor.login, e);
+                                        return;
+                                    }
+                                };
+                                if user.is_bot() {
+                                    info!("skip bot:{}:", user.login);
+                                    return;
+                                }
+                                let a_model: github_user::ActiveModel = user.into();
+                                context
+                                    .github_handler_stg()
+                                    .store_user(a_model)
+                                    .await
+                                    .unwrap()
                             }
-                        };
-                        if user.is_bot() {
-                            info!("skip bot:{}:", user.login);
-                            return;
                         }
-                        let a_model: github_user::ActiveModel = user.into();
-                        context
-                            .github_handler_stg()
-                            .store_user(a_model)
-                            .await
-                            .unwrap()
+                    }
+                    Err(e) => {
+                        error!("query name {} err: {}", contributor.login, e);
+                        return;
                     }
                 };
 
@@ -542,7 +521,7 @@ pub async fn analyze_all(
 
     // 并发处理 Stream
     program_stream
-        .try_for_each_concurrent(8, |model| {
+        .try_for_each_concurrent(32, |model| {
             let context = context.clone();
             let stg = stg.clone();
             async move {
@@ -565,7 +544,33 @@ pub async fn analyze_all(
 
 pub async fn process_item(model: &programs::Model, context: Context) {
     if let Some((owner, repo)) = utils::parse_to_owner_and_repo(&model.github_url) {
-        let res = analyze_git_contributors(context.clone(), &owner, &repo).await;
+        let base_dir = context.base_dir.clone();
+        let nested_path = utils::repo_dir(base_dir, &owner, &repo);
+
+        if !nested_path.exists() {
+            let github_client = GitHubApiClient::new();
+            let repository = github_client.get_repo_info(&owner, &repo).await;
+            match repository {
+                Ok(_) => {
+                    error!("仓库路径不存在: {}, 但是GitHub存在", nested_path.display());
+                }
+                Err(_) => {
+                    warn!("无法查询到仓库 {}/{}, path:{:?}", owner, repo, nested_path);
+                    // if nested_path.exists() {
+                    //     tokio::fs::remove_dir_all(&nested_path).await.unwrap();
+                    //     warn!("删除不存在的仓库：{:?}", nested_path);
+                    // }
+
+                    context
+                        .github_handler_stg()
+                        .remove_programs_and_related(model.id)
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+
+        let res = analyze_git_contributors(context.clone(), &owner, &repo, model.id).await;
         if res.is_ok() {
             let mut a_model = model.clone().into_active_model();
             a_model.github_analyzed = Set(true);

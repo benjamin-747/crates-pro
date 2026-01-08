@@ -1,4 +1,7 @@
-use std::sync::{atomic::{AtomicUsize, Ordering}, Arc};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 use crate::{git, utils, BoxError};
 use database::storage::Context;

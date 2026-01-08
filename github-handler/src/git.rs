@@ -35,7 +35,15 @@ pub async fn clone_repo(
 
     match status {
         Ok(status) if !status.success() => {
-            error!("克隆仓库失败: {}，可能需要认证或不存在，跳过此仓库", status);
+            error!(
+                "克隆仓库失败: {}，可能需要认证或不存在，清理目录 {}",
+                status, path
+            );
+            if target_dir.exists() {
+                if let Err(e) = tokio::fs::remove_dir_all(target_dir).await {
+                    error!("删除目录失败: {}", e);
+                }
+            }
             return Err(anyhow::Error::msg("clone failed"));
         }
         Err(e) => {
