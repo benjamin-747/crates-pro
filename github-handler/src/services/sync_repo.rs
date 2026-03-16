@@ -1,4 +1,6 @@
-use crate::{git, utils, BoxError};
+use std::sync::Arc;
+
+use crate::{git, services::github_api::RepoFetchError, utils, BoxError};
 use chrono::{Duration, Utc};
 use database::storage::{github_handler_storage::GithubHanlderStorage, Context};
 use entity::programs;
@@ -35,7 +37,7 @@ pub(crate) async fn sync_repo_with_sha(
                         if git::update_repo(&nested_path, &owner, &repo).await.is_ok() {
                             save_sync_time(program, &stg).await?;
                         }
-                    } else if git::clone_repo(&nested_path, &owner, &repo, false)
+                    } else if git::clone_repo(&nested_path, &owner, &repo, true)
                         .await
                         .is_ok()
                     {
@@ -69,16 +71,19 @@ pub(crate) async fn update_programs(context: Context) -> Result<(), BoxError> {
     Ok(())
 }
 
-pub(crate) async fn update_crates_nodeid(context: Context) -> Result<(), BoxError> {
+pub(crate) async fn update_crates_nodeid(
+    context: Context,
+    github_client: Arc<GitHubApiClient>,
+) -> Result<(), BoxError> {
     let stg = context.github_handler_stg();
     let crates_stream = stg.query_crates_stream().await.unwrap();
     crates_stream
         .try_for_each_concurrent(16, |model| {
             let context = context.clone();
+            let github_client = github_client.clone();
             async move {
                 let repository = model.repository.clone().unwrap();
                 if let Some((owner, repo)) = utils::parse_to_owner_and_repo(&repository) {
-                    let github_client = GitHubApiClient::new();
                     let repo = github_client.get_repo_info(&owner, &repo).await;
                     let mut a_model = model.into_active_model();
                     match repo {
@@ -92,12 +97,11 @@ pub(crate) async fn update_crates_nodeid(context: Context) -> Result<(), BoxErro
                                 .await
                                 .unwrap()
                         }
-                        Err(err) => {
-                            if err.status() == Some(reqwest::StatusCode::NOT_FOUND) {
-                                error!("Repo Not Found, tag to invalid:{}", err);
-                                a_model.repo_invalid = Set(true);
-                            }
+                        Err(RepoFetchError::NotFound) => {
+                            error!("Repo Not Found, tag to invalid");
+                            a_model.repo_invalid = Set(true);
                         }
+                        Err(_) => (),
                     }
                     context
                         .github_handler_stg()
@@ -139,21 +143,5 @@ mod test {
             .await
             .unwrap();
         println!("All done");
-    }
-
-    #[tokio::test]
-    async fn test_api_404() {
-        let github_client = GitHubApiClient::new();
-        let res = github_client.get_repo_info("fake", "nothing").await;
-        match res {
-            Ok(_) => {}
-            Err(e) => {
-                if e.status() == Some(StatusCode::NOT_FOUND) {
-                    println!("err: {}", e)
-                } else {
-                    panic!("Not 404")
-                }
-            }
-        }
     }
 }

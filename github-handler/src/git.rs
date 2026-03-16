@@ -30,6 +30,7 @@ pub async fn clone_repo(
     ];
     if partial_clone {
         args.push("--filter=blob:none");
+        args.push("--bare");
     }
     let status = TokioCommand::new("git").args(args).status().await;
 
@@ -106,7 +107,7 @@ pub async fn update_repo(
             if !status.success() {
                 eprintln!("Git command failed with status: {:?}", status);
                 std::fs::remove_dir_all(target_dir)?;
-                clone_repo(target_dir, owner, repo, false).await?;
+                clone_repo(target_dir, owner, repo, true).await?;
             }
         }
         Err(e) => {

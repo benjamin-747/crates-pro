@@ -52,7 +52,6 @@ impl From<GitHubUser> for github_user::ActiveModel {
             updated_at: Set(user.updated_at.naive_utc()),
             inserted_at: Set(now),
             updated_at_local: Set(now),
-            commit_email: Set(None),
         }
     }
 }

@@ -100,6 +100,7 @@ impl GithubHanlderStorage {
             .on_conflict(
                 OnConflict::columns([programs::Column::GithubNodeId])
                     .update_columns([programs::Column::UpdatedAt])
+                    .update_columns([programs::Column::InCratesio])
                     .to_owned(),
             )
             .do_nothing()

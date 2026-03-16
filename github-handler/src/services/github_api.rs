@@ -17,8 +17,18 @@ const GITHUB_API_URL: &str = "https://api.github.com";
 const GITHUB_GRAPH_API_URL: &str = "https://api.github.com/graphql";
 
 // GitHub API客户端
+#[derive(Clone)]
 pub struct GitHubApiClient {
     client: Client,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub enum RepoFetchError {
+    NotFound,
+    RateLimited,
+    ServerError(u16),
+    Network(reqwest::Error),
 }
 
 impl GitHubApiClient {
@@ -149,11 +159,31 @@ impl GitHubApiClient {
         &self,
         owner: &str,
         repo: &str,
-    ) -> Result<RestfulRepository, reqwest::Error> {
+    ) -> Result<RestfulRepository, RepoFetchError> {
         let url = format!("{}/repos/{}/{}", GITHUB_API_URL, owner, repo);
-        let response = self.authorized_request(&url).await?.error_for_status()?;
-        let res: RestfulRepository = response.json().await?;
+        let response = self
+            .authorized_request(&url)
+            .await
+            .map_err(RepoFetchError::Network)?;
+
+        let status = response.status();
+
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err(RepoFetchError::NotFound);
+        }
+
+        if status == reqwest::StatusCode::FORBIDDEN {
+            return Err(RepoFetchError::RateLimited);
+        }
+
+        if status.is_server_error() {
+            return Err(RepoFetchError::ServerError(status.as_u16()));
+        }
+
+        let res: RestfulRepository = response.json().await.map_err(RepoFetchError::Network)?;
+
         tracing::info!("请求repo 信息成功:{:?}", res);
+
         Ok(res)
     }
 
@@ -397,7 +427,7 @@ impl GitHubApiClient {
 
     pub async fn start_all_sync(&self, context: &Context) -> Result<(), Error> {
         let date = NaiveDate::parse_from_str("2010-06-16", "%Y-%m-%d").unwrap();
-        let end_date = NaiveDate::parse_from_str("2025-12-30", "%Y-%m-%d").unwrap();
+        let end_date = NaiveDate::parse_from_str("2026-03-05", "%Y-%m-%d").unwrap();
         // let threshold_date = NaiveDate::parse_from_str("2015-01-01", "%Y-%m-%d").unwrap();
 
         let dates: Vec<NaiveDate> = {

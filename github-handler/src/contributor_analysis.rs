@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use chrono::{DateTime, FixedOffset};
 use futures::{stream, StreamExt, TryStreamExt};
 use sea_orm::ActiveValue::Set;
 use sea_orm::IntoActiveModel;
@@ -14,6 +14,7 @@ use database::storage::Context;
 use entity::{github_user, programs};
 use model::github::{AnalyzedUser, ContributorAnalysis};
 
+use crate::services::github_api::RepoFetchError;
 use crate::{contributor_analysis, services::github_api::GitHubApiClient, BoxError};
 use crate::{git, utils};
 
@@ -31,7 +32,7 @@ pub async fn analyze_contributor_timezone(
     analyzed_emails: &HashSet<String>,
 ) -> Option<ContributorAnalysis> {
     // 用于分析的邮箱可能存在多个不同的值，如profile 设置的值，commit时设置的值
-    info!("分析作者 {:?} 的时区统计", analyzed_emails);
+    // info!("分析作者 {:?} 的时区统计", analyzed_emails);
 
     let mut commits = vec![];
     for email in analyzed_emails {
@@ -45,8 +46,6 @@ pub async fn analyze_contributor_timezone(
             }
             None => {
                 continue;
-                // warn!("无法获取作者提交: {}", author_email);
-                // return None;
             }
         };
     }
@@ -91,7 +90,7 @@ pub async fn analyze_contributor_timezone(
 
 #[derive(Debug)]
 struct CommitInfo {
-    _datetime: DateTime<FixedOffset>,
+    // _datetime: DateTime<FixedOffset>,
     timezone: String,
 }
 
@@ -114,33 +113,30 @@ async fn get_author_commits(repo_path: &PathBuf, author_email: &str) -> Option<V
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<&str> = stdout
-        .trim()
-        .split('\n')
-        .filter(|l| !l.is_empty())
-        .collect();
 
     let mut commits = Vec::new();
 
-    for line in lines {
-        if let Ok(dt) = line.parse::<DateTime<FixedOffset>>() {
-            // 提取时区部分
-            let timezone = if let Some(pos) = line.rfind(|c: char| ['+', '-'].contains(&c)) {
-                line[pos..].to_string()
-            } else if line.contains("Z") {
-                "Z".to_string() // UTC
-            } else {
-                "Unknown".to_string()
-            };
-
-            commits.push(CommitInfo {
-                _datetime: dt,
-                timezone,
-            });
+    for line in stdout.lines() {
+        if line.is_empty() {
+            continue;
         }
+
+        let timezone = extract_timezone(line);
+
+        commits.push(CommitInfo { timezone });
     }
 
     Some(commits)
+}
+
+fn extract_timezone(line: &str) -> String {
+    if let Some(pos) = line.rfind(|c| c == '+' || c == '-') {
+        line[pos..].to_string()
+    } else if line.ends_with('Z') {
+        "Z".to_string()
+    } else {
+        "Unknown".to_string()
+    }
 }
 
 async fn analyze_contributor(
@@ -300,43 +296,6 @@ async fn analyze_contributor_locations(
         100.0 - china_percentage
     );
 
-    // 查询中国贡献者统计
-    // match context
-    //     .github_handler_stg()
-    //     .get_repository_china_contributor_stats(repository_id)
-    //     .await
-    // {
-    //     Ok(stats) => {
-    //         info!(
-    //             "仓库 {}/{} 的中国贡献者统计: {}人中有{}人来自中国 ({:.1}%)",
-    //             owner,
-    //             repo,
-    //             stats.total_contributors,
-    //             stats.china_contributors,
-    //             stats.china_percentage
-    //         );
-
-    //         if !stats.china_contributors_details.is_empty() {
-    //             info!("中国贡献者TOP列表:");
-    //             for (i, contributor) in stats.china_contributors_details.iter().enumerate().take(5)
-    //             {
-    //                 let name_display = contributor
-    //                     .name
-    //                     .clone()
-    //                     .unwrap_or_else(|| contributor.login.clone());
-    //                 info!(
-    //                     "  {}. {} - {} 次提交",
-    //                     i + 1,
-    //                     name_display,
-    //                     contributor.contributions
-    //                 );
-    //             }
-    //         }
-    //     }
-    //     Err(e) => {
-    //         error!("获取中国贡献者统计失败: {}", e);
-    //     }
-    // }
 
     Ok(())
 }
@@ -347,11 +306,9 @@ pub(crate) async fn analyze_git_contributors(
     owner: &str,
     repo: &str,
     repository_id: Uuid,
+    github_client: Arc<GitHubApiClient>,
 ) -> Result<(), anyhow::Error> {
     info!("分析仓库贡献者: {}/{}", owner, repo);
-
-    // 创建GitHub API客户端
-    let github_client = GitHubApiClient::new();
 
     // 获取仓库贡献者
     let contributors = match github_client
@@ -365,11 +322,10 @@ pub(crate) async fn analyze_git_contributors(
         }
     };
 
-    // let analyzed_users: Vec<AnalyzedUser> =
     stream::iter(contributors)
-        .for_each_concurrent(2, |contributor| {
+        .for_each_concurrent(4, |contributor| {
             let context = context.clone();
-            let github_client = GitHubApiClient::new();
+            let github_client = github_client.clone();
             async move {
                 let user = match context
                     .github_handler_stg()
@@ -435,105 +391,31 @@ pub(crate) async fn analyze_git_contributors(
     Ok(())
 }
 
-// 查询仓库的顶级贡献者
-pub async fn query_top_contributors(
-    context: Context,
-    owner: &str,
-    repo: &str,
-) -> Result<(), BoxError> {
-    info!("查询仓库 {}/{} 的顶级贡献者", owner, repo);
-
-    // 获取仓库ID
-    let repository_id = match context
-        .github_handler_stg()
-        .get_repository_id(owner, repo)
-        .await?
-    {
-        Some(id) => id,
-        None => {
-            warn!("仓库 {}/{} 未在数据库中注册", owner, repo);
-            return Ok(());
-        }
-    };
-
-    // 查询贡献者统计
-    match context
-        .github_handler_stg()
-        .query_top_contributors(repository_id)
-        .await
-    {
-        Ok(top_contributors) => {
-            info!("仓库 {}/{} 的贡献者统计:", owner, repo);
-            for (i, contributor) in top_contributors.iter().enumerate().take(10) {
-                let location_str = contributor
-                    .location
-                    .as_ref()
-                    .map(|loc| format!(" ({})", loc))
-                    .unwrap_or_default();
-
-                let name_display = contributor.name.as_ref().unwrap_or(&contributor.login);
-
-                info!(
-                    "  {}. {}{} - {} 次提交",
-                    i + 1,
-                    name_display,
-                    location_str,
-                    contributor.contributions
-                );
-            }
-        }
-        Err(e) => {
-            error!("查询贡献者统计失败: {}", e);
-        }
-    }
-
-    // 查询中国贡献者统计
-    match context
-        .github_handler_stg()
-        .get_repository_china_contributor_stats(repository_id)
-        .await
-    {
-        Ok(stats) => {
-            info!(
-                "仓库 {}/{} 的中国贡献者统计: {}人中有{}人来自中国 ({:.1}%)",
-                owner,
-                repo,
-                stats.total_contributors,
-                stats.china_contributors,
-                stats.china_percentage
-            );
-        }
-        Err(e) => {
-            error!("获取中国贡献者统计失败: {}", e);
-        }
-    }
-
-    Ok(())
-}
-
 pub async fn analyze_all(
     context: Context,
     cratesio: bool,
     not_analyzed: bool,
+    github_client: Arc<GitHubApiClient>,
 ) -> Result<(), BoxError> {
     let stg = context.github_handler_stg();
     let program_stream = stg.query_programs_stream(cratesio).await.unwrap();
 
     // 并发处理 Stream
     program_stream
-        .try_for_each_concurrent(32, |model| {
+        .try_for_each_concurrent(8, |model| {
             let context = context.clone();
             let stg = stg.clone();
+            let github_client = github_client.clone();
             async move {
                 // 通过数据库数据存在判断
                 if not_analyzed {
                     let exist = stg.check_program_in_analyze(model.id).await?;
                     if !exist {
-                        process_item(&model, context).await;
+                        process_item(&model, context, github_client).await;
                     }
                 } else if !model.github_analyzed {
                     // 通过flag判断
-                    process_item(&model, context).await;
+                    process_item(&model, context, github_client).await;
                 }
                 Ok(())
             }
@@ -542,19 +424,22 @@ pub async fn analyze_all(
     Ok(())
 }
 
-pub async fn process_item(model: &programs::Model, context: Context) {
+pub async fn process_item(
+    model: &programs::Model,
+    context: Context,
+    github_client: Arc<GitHubApiClient>,
+) {
     if let Some((owner, repo)) = utils::parse_to_owner_and_repo(&model.github_url) {
         let base_dir = context.base_dir.clone();
         let nested_path = utils::repo_dir(base_dir, &owner, &repo);
 
         if !nested_path.exists() {
-            let github_client = GitHubApiClient::new();
             let repository = github_client.get_repo_info(&owner, &repo).await;
             match repository {
                 Ok(_) => {
                     error!("仓库路径不存在: {}, 但是GitHub存在", nested_path.display());
                 }
-                Err(_) => {
+                Err(RepoFetchError::NotFound) => {
                     warn!("无法查询到仓库 {}/{}, path:{:?}", owner, repo, nested_path);
                     // if nested_path.exists() {
                     //     tokio::fs::remove_dir_all(&nested_path).await.unwrap();
@@ -567,10 +452,12 @@ pub async fn process_item(model: &programs::Model, context: Context) {
                         .await
                         .unwrap();
                 }
+                Err(_) => (),
             }
         }
 
-        let res = analyze_git_contributors(context.clone(), &owner, &repo, model.id).await;
+        let res =
+            analyze_git_contributors(context.clone(), &owner, &repo, model.id, github_client).await;
         if res.is_ok() {
             let mut a_model = model.clone().into_active_model();
             a_model.github_analyzed = Set(true);

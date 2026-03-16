@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use clap::{ArgAction, Parser, Subcommand};
 use database::storage::Context;
@@ -55,14 +55,6 @@ enum Commands {
         not_analyzed: bool,
     },
 
-    /// 查询仓库贡献者统计
-    Query {
-        /// 仓库所有者
-        owner: String,
-
-        /// 仓库名称
-        repo: String,
-    },
     /// 给crates 表和关联的programs 表设置nodeid
     UpdateCratesNodeid,
     /// 给programs设置 in_cratesio 字段
@@ -100,6 +92,7 @@ async fn main() -> Result<(), BoxError> {
     // 解析命令行参数
     let cli = Cli::parse();
 
+    let github_client = Arc::new(GitHubApiClient::new());
     // 连接数据库
     info!("连接数据库...");
     let config = config::load_config().unwrap();
@@ -107,17 +100,12 @@ async fn main() -> Result<(), BoxError> {
 
     // 处理子命令
     match cli.command {
-        Some(Commands::Query { owner, repo }) => {
-            contributor_analysis::query_top_contributors(context, &owner, &repo).await?;
-        }
 
         Some(Commands::SyncUrl) => {
-            let github_client = GitHubApiClient::new();
             github_client.start_all_sync(&context).await?;
         }
 
         Some(Commands::SyncCondition) => {
-            let github_client = GitHubApiClient::new();
             github_client.start_sync_condition(&context).await?;
         }
 
@@ -126,11 +114,12 @@ async fn main() -> Result<(), BoxError> {
             not_analyzed,
         }) => {
             tracing::info!("cratesio:{}, not_analyzed:{}", cratesio, not_analyzed);
-            contributor_analysis::analyze_all(context, cratesio, not_analyzed).await?;
+            contributor_analysis::analyze_all(context, cratesio, not_analyzed, github_client)
+                .await?;
         }
 
         Some(Commands::UpdateCratesNodeid) => {
-            sync_repo::update_crates_nodeid(context).await?;
+            sync_repo::update_crates_nodeid(context, github_client).await?;
         }
 
         Some(Commands::SyncRepo {
